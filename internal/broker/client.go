@@ -23,9 +23,23 @@ import (
 
 // Client synchronizes local profile state, never model traffic. The mutex and
 // filesystem lock serialize sibling sessions sharing the same local profile.
+// Conflict describes one document whose local and hosted edits diverged.
+// Resolve must be called with either "local" or "hosted"; it completes the
+// blocked synchronization attempt using a revision-checked write.
+type Conflict struct {
+	Name    string
+	Local   []byte
+	Hosted  []byte
+	Resolve func(choice string) error
+}
+
+func (c Conflict) ConflictName() string                { return c.Name }
+func (c Conflict) ResolveConflict(choice string) error { return c.Resolve(choice) }
+
 type Client struct {
 	base, token, dir string
 	http             *http.Client
+	conflicts        chan<- Conflict
 	mu               sync.Mutex
 
 	snapshotMu   sync.Mutex
@@ -312,7 +326,42 @@ func (c *Client) syncFile(ctx context.Context, name string, changed *bool) error
 		localChanged := localHash != state.Local
 		remoteChanged := remote.Revision != state.Remote
 		if localChanged && remoteChanged && !bytes.Equal(local, remote.Data) {
-			return errors.New("sync conflict: local and hosted copies retained; reconcile them before retrying")
+			if c.conflicts == nil {
+				return errors.New("sync conflict: local and hosted copies retained; reconcile them before retrying")
+			}
+			choice := make(chan string, 1)
+			result := make(chan error, 1)
+			c.conflicts <- Conflict{Name: name, Local: append([]byte(nil), local...), Hosted: append([]byte(nil), remote.Data...), Resolve: func(value string) error {
+				select {
+				case choice <- value:
+				case <-ctx.Done():
+					return context.Cause(ctx)
+				}
+				return <-result
+			}}
+			select {
+			case value := <-choice:
+				if value != "local" && value != "hosted" {
+					return errors.New("invalid sync conflict choice")
+				}
+				if value == "local" {
+					err = c.request(ctx, "PUT", "/v1/items/"+url.PathEscape(name), remote.Revision, Item{Data: local}, nil)
+					if err == nil {
+						remote.Data, remote.Revision = local, localHash
+					}
+				} else {
+					if err = publishDocument(c.dir, name, remote.Data); err == nil {
+						local = remote.Data
+						*changed = true
+					}
+				}
+				result <- err
+				if err != nil {
+					return err
+				}
+			case <-ctx.Done():
+				return context.Cause(ctx)
+			}
 		}
 		if localChanged && !bytes.Equal(local, remote.Data) {
 			if err = c.request(ctx, "PUT", "/v1/items/"+url.PathEscape(name), remote.Revision, Item{Data: local}, nil); err != nil {
@@ -380,7 +429,7 @@ func (c *Client) RunSyncChanged(ctx context.Context, report func(error), notify 
 // re-reads from disk, so a coalesced signal costs one redundant read and never a
 // lost change. It must not block for long, because the poll that produced it is
 // still holding the profile lock. Nil leaves the worker with nothing to report.
-func Start(ctx context.Context, dir string, stderr io.Writer, notify func()) (finish func() error, err error) {
+func Start(ctx context.Context, dir string, stderr io.Writer, notify func(), conflicts ...chan<- Conflict) (finish func() error, err error) {
 	startup, cancel := context.WithTimeout(ctx, 45*time.Second)
 	client, err := Connect(startup, dir)
 	cancel()
@@ -393,6 +442,9 @@ func Start(ctx context.Context, dir string, stderr io.Writer, notify func()) (fi
 	}
 	if client == nil {
 		return nil, nil
+	}
+	if len(conflicts) > 0 {
+		client.conflicts = conflicts[0]
 	}
 	// Only the worker writes synced. The exit flush reads it after joining the
 	// worker, preserving repair-command exit status until initial sync succeeds.

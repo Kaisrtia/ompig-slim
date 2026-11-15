@@ -81,23 +81,32 @@ func main() {
 	// or a model role assigned on another machine waits for a restart.
 	var finishSync func() error
 	var syncedDocuments <-chan struct{}
+	var syncConflicts <-chan any
 	if brokerStartupNeeded(args) {
 		// One buffered slot coalesces signals: the receiver re-reads every document
 		// from disk, so a second signal for the same files says nothing new, and a
 		// full slot must never stall the worker holding the profile lock.
 		documents := make(chan struct{}, 1)
+		conflicts := make(chan broker.Conflict, 8)
+		conflictEvents := make(chan any, 8)
+		go func() {
+			for conflict := range conflicts {
+				conflictEvents <- conflict
+			}
+		}()
 		var err error
 		finishSync, err = broker.Start(context.Background(), coding.DefaultAgentDir(), os.Stderr, func() {
 			select {
 			case documents <- struct{}{}:
 			default:
 			}
-		})
+		}, conflicts)
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		syncedDocuments = documents
+		syncConflicts = conflictEvents
 	}
 	if len(args) > 0 && args[0] == "durable" {
 		ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
@@ -141,6 +150,7 @@ func main() {
 	cli.Main(args, &cli.MainOptions{
 		SystemPromptPreamble: prompts.System(),
 		SyncedDocuments:      syncedDocuments,
+		SyncConflicts:        syncConflicts,
 		ExtensionFactories: []extension.InlineExtension{
 			// Hidden program machinery, like agent-state: always active even with
 			// --no-extensions, without adding a user-managed resource or tool.

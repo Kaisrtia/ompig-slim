@@ -138,6 +138,45 @@ func TestPreferenceConflictDoesNotStopOtherFiles(t *testing.T) {
 	}
 }
 
+// TestConflictChoiceCommitsTheSelectedCopy proves the interactive resolver
+// completes a blocked CAS attempt without losing the chosen local bytes.
+func TestConflictChoiceCommitsTheSelectedCopy(t *testing.T) {
+	a, b, _ := testClients(t)
+	ctx := context.Background()
+	mustWrite(t, filepath.Join(a.dir, "settings.json"), `{"base":true}`)
+	if err := a.SyncFiles(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if err := b.SyncFiles(ctx); err != nil {
+		t.Fatal(err)
+	}
+	mustWrite(t, filepath.Join(a.dir, "settings.json"), `{"host":true}`)
+	mustWrite(t, filepath.Join(b.dir, "settings.json"), `{"local":true}`)
+	if err := a.SyncFiles(ctx); err != nil {
+		t.Fatal(err)
+	}
+	conflicts := make(chan Conflict, 1)
+	b.conflicts = conflicts
+	done := make(chan error, 1)
+	go func() { done <- b.SyncFiles(ctx) }()
+	conflict := <-conflicts
+	if conflict.Name != "settings.json" || string(conflict.Hosted) != `{"host":true}` {
+		t.Fatalf("wrong conflict payload: %+v", conflict)
+	}
+	if err := conflict.Resolve("local"); err != nil {
+		t.Fatal(err)
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	if err := a.SyncFiles(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if got, err := readLocal(filepath.Join(a.dir, "settings.json")); err != nil || string(got) != `{"local":true}` {
+		t.Fatalf("local choice was not committed: %s, %v", got, err)
+	}
+}
+
 // TestStartRecoversAfterBrokerOutage exercises the owned five-second worker,
 // not just a manual SyncFiles call or shutdown flush. Reconnection must not open
 // a local credential mirror while the host is unavailable.

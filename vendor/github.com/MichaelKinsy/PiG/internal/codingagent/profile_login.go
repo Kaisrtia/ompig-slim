@@ -26,3 +26,13 @@ var ProfileLogin *ProfileLoginOption
 // coalesced signal costs one redundant read and must never be sent as lost
 // information. Nil leaves configuration immutable until /reload, as upstream.
 var SyncedDocuments <-chan struct{}
+
+// SyncConflicts carries embedder-owned profile conflicts to the interactive
+// owner loop. Values must implement SyncConflict; nil disables the dialog.
+var SyncConflicts <-chan any
+
+// SyncConflict is the small UI-independent contract used by a synchronizer.
+type SyncConflict interface {
+	ConflictName() string
+	ResolveConflict(string) error
+}

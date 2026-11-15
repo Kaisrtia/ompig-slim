@@ -712,6 +712,8 @@ type MainOptions struct {
 	// its configuration instead of keeping the copy it loaded at launch. See
 	// codingagent.SyncedDocuments for the delivery contract.
 	SyncedDocuments <-chan struct{}
+	// SyncConflicts supplies per-file hosted/local choices to the interactive dialog.
+	SyncConflicts <-chan any
 }
 
 // ProfileLoginOption configures a local-only profile-storage login dialog.
@@ -726,10 +728,12 @@ func Main(args []string, options *MainOptions) {
 	profileSyncBeforeExit = nil
 	codingagent.ProfileLogin = nil
 	codingagent.SyncedDocuments = nil
+	codingagent.SyncConflicts = nil
 	if options != nil {
 		profileSyncBeforeExit = options.BeforeExit
 		codingagent.ProfileLogin = options.ProfileLogin
 		codingagent.SyncedDocuments = options.SyncedDocuments
+		codingagent.SyncConflicts = options.SyncConflicts
 	}
 	defer func() {
 		if code := flushProfileSync(0); code != 0 {

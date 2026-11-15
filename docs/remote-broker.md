@@ -230,8 +230,10 @@ for the delayed-network comparison and reproduction command. First
 connection adopts hosted files and privately backs up differing local files as
 `.broker-sync-<host-hash>-<filename>.backup`; absent hosted files are seeded from
 local copies. Later edits and deletion tombstones use per-document CAS.
-Conflicting edits preserve both copies and report an error; reconcile to the
-same desired content before retrying. A failed document does not stop unrelated
+Conflicting edits preserve both copies and open a dialog in interactive mode.
+Choose **Keep local** or **Use hosted** for each file; the selected version is
+then committed with CAS. Non-interactive and dismissed dialogs leave the
+conflict unresolved and retry later. A failed document does not stop unrelated
 documents from synchronizing. Do not delete ancestry files to suppress conflicts.
 Startup failures keep the five-second retry loop and normal-exit flush active;
 a failed active-session preference flush can fail CLI exit. Until initial sync

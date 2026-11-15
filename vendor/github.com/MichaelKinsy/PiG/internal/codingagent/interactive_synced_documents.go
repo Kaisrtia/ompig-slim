@@ -39,6 +39,28 @@ func (m *InteractiveMode) startSyncedDocumentWatcher(ctx context.Context) func()
 				return
 			case <-signals:
 				_ = m.postToMain(stopCtx, m.applySyncedDocuments)
+			case conflict, ok := <-SyncConflicts:
+				if !ok {
+					SyncConflicts = nil
+					continue
+				}
+				request, ok := conflict.(SyncConflict)
+				if !ok {
+					continue
+				}
+				name := request.ConflictName()
+				_ = m.postToMain(stopCtx, func() {
+					choice, selected := m.askSelector(stopCtx, "Sync conflict: "+name, []string{"Keep local", "Use hosted"})
+					if !selected {
+						_ = request.ResolveConflict("cancel")
+						return
+					}
+					if choice == "Keep local" {
+						_ = request.ResolveConflict("local")
+					} else {
+						_ = request.ResolveConflict("hosted")
+					}
+				})
 			}
 		}
 	})
