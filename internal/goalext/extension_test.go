@@ -160,7 +160,7 @@ func TestPauseNoticeNamesTheBlockerAndTheResumeAction(t *testing.T) {
 	}
 	// The blocker text outlives the streak, so a resumed goal still explains what
 	// had stopped it while the count restarts.
-	if err := tracker.Resume(); err != nil {
+	if _, err := tracker.Resume(); err != nil {
 		t.Fatal(err)
 	}
 	rendered := render(tracker.Get())

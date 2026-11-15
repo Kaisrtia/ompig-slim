@@ -4,6 +4,7 @@ package goalext
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"strings"
 	"sync"
@@ -15,8 +16,11 @@ import (
 
 // Extension returns a hidden inline extension. The goal tool remains available
 // to the model while the slash command provides the human lifecycle controls.
-func Extension(api extension.API) error {
-	tracker := goal.New()
+func Extension(api extension.API) error { return extensionWithTracker(api, goal.New()) }
+
+// extensionWithTracker is Extension over a caller-supplied tracker, so a test
+// can observe the state the tool and slash command report.
+func extensionWithTracker(api extension.API, tracker *goal.Tracker) error {
 	var mu sync.Mutex
 	api.RegisterTool(extension.ToolDefinition{
 		Name: "goal", Label: "Goal", Description: "Track one persistent autonomous objective. Use create, get, complete, pause, resume, drop, blocked, or progress. Report blocked when the objective needs input or access you do not have, and progress when a turn advanced it without finishing.",
@@ -60,7 +64,7 @@ func Extension(api extension.API) error {
 			case "pause":
 				err = tracker.Pause()
 			case "resume":
-				err = tracker.Resume()
+				_, err = tracker.Resume()
 			case "drop":
 				err = tracker.Drop()
 			default:
@@ -117,7 +121,13 @@ func Extension(api extension.API) error {
 				return err
 			}
 		case "resume":
-			if err := tracker.Resume(); err != nil {
+			if err := resumeGoal(tracker, func(objective string) error {
+				commandContext := extension.CommandContextFromContext(ctx)
+				if commandContext == nil {
+					return fmt.Errorf("goal command context is unavailable")
+				}
+				return commandContext.SendUserMessage(objective, &extension.SendUserMessageOptions{ExpandPromptTemplates: new(true)})
+			}); err != nil {
 				return err
 			}
 			// The streak is cleared, so the working label no longer describes the goal.
@@ -154,6 +164,27 @@ func Extension(api extension.API) error {
 		}
 		return nil
 	})
+	return nil
+}
+
+// resumeGoal reactivates a paused goal and starts its objective, so an explicit
+// resume works from an idle session instead of waiting for a turn that would
+// reach the settlement boundary. It starts nothing when the goal was already
+// active, so repeated resumes cannot duplicate the objective.
+func resumeGoal(tracker *goal.Tracker, submit func(objective string) error) error {
+	state := tracker.Get()
+	if state == nil {
+		return errors.New("there is no active goal")
+	}
+	restart, err := tracker.Resume()
+	if err != nil || !restart {
+		return err
+	}
+	if err := submit(state.Objective); err != nil {
+		// A resume that cannot start work must not report the goal as running.
+		_ = tracker.Pause()
+		return err
+	}
 	return nil
 }
 

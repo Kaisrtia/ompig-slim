@@ -17,13 +17,20 @@ would otherwise be poked forever.
 | none | `create` | active |
 | active | `pause`, or three identical blocker reports | paused |
 | active | `complete` | complete |
-| paused | `resume` | active |
+| paused | `resume` | active, and the objective restarts |
 | active, paused | `complete` | complete |
 | any | `drop` | none |
 
 A settled goal accepts no blocker or progress report, so a late report or a
 pending automatic continuation cannot restart work a human stopped. An aborted
 run (`Esc`) pauses the goal rather than completing it.
+
+Only `resume` reanimates a paused goal. Continuation happens at a settlement
+boundary, which an idle session never reaches, so `resume` submits the objective
+again itself. It restarts the same objective once, with the same skill and
+template expansion a typed prompt gets: a resume of an already-active goal is an
+error, so repeating the control cannot duplicate the objective. An ordinary
+follow-up afterwards runs on its own text and does not resume the objective.
 
 ## Blocked and progress outcomes
 

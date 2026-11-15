@@ -17,8 +17,10 @@ func TestLifecycleKeepsObjectiveUntilDropped(t *testing.T) {
 	if state = tracker.Get(); state == nil || state.Status != StatusPaused {
 		t.Fatalf("paused state = %+v", state)
 	}
-	if err := tracker.Resume(); err != nil {
+	if restart, err := tracker.Resume(); err != nil {
 		t.Fatal(err)
+	} else if !restart {
+		t.Fatal("resuming a paused goal must restart its objective")
 	}
 	if state = tracker.Get(); state == nil || state.Status != StatusActive {
 		t.Fatalf("resumed state = %+v", state)
@@ -89,7 +91,7 @@ func TestRepeatedBlockerPausesAtThreshold(t *testing.T) {
 	if _, err := tracker.Blocked("needs the staging API token"); err == nil {
 		t.Fatal("a paused goal accepted another blocker report")
 	}
-	if err := tracker.Resume(); err != nil {
+	if _, err := tracker.Resume(); err != nil {
 		t.Fatal(err)
 	}
 	if state = tracker.Get(); state.BlockerCount != 0 || state.Blocker != "needs the staging API token" {
@@ -216,4 +218,26 @@ func mustStatus(name string) Status {
 		return StatusComplete
 	}
 	return StatusPaused
+}
+
+// TestResumeRestartsAPausedObjective pins the resume contract the slash command
+// depends on: a paused goal reports that its objective must restart, so the
+// command submits it instead of only flipping the status.
+func TestResumeRestartsAPausedObjective(t *testing.T) {
+	tracker := New()
+	if err := tracker.Create("finish the work", 0); err != nil {
+		t.Fatal(err)
+	}
+	if restart, err := tracker.Resume(); err == nil || restart {
+		t.Fatalf("resume of an active goal = (%v, %v), want an error", restart, err)
+	}
+	if err := tracker.Pause(); err != nil {
+		t.Fatal(err)
+	}
+	if restart, err := tracker.Resume(); err != nil || !restart {
+		t.Fatalf("resume of a paused goal = (%v, %v), want (true, nil)", restart, err)
+	}
+	if state := tracker.Get(); state == nil || state.Status != StatusActive {
+		t.Fatalf("resumed state = %+v", state)
+	}
 }

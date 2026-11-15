@@ -108,21 +108,24 @@ func (t *Tracker) Poke() int {
 // Pause suspends an active goal without discarding its accounting.
 func (t *Tracker) Pause() error { return t.transition(StatusPaused, StatusActive) }
 
-// Resume reactivates a paused goal. The blocker text stays as the explanation of
-// the pause, but the streak restarts: a human deciding to continue is a new
-// attempt, not the fourth report of the same blocker.
-func (t *Tracker) Resume() error {
+// Resume reactivates a paused goal and reports whether its objective must be
+// restarted, so an explicit resume starts work from an idle session instead of
+// waiting for a turn that would reach the settlement boundary. The blocker text
+// stays as the explanation of the pause, but the streak restarts: a human
+// deciding to continue is a new attempt, not the fourth report of the same
+// blocker.
+func (t *Tracker) Resume() (restart bool, err error) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
 	if t.state == nil {
-		return errors.New("there is no active goal")
+		return false, errors.New("there is no active goal")
 	}
 	if t.state.Status != StatusPaused {
-		return fmt.Errorf("cannot transition goal from %s to %s", t.state.Status, StatusActive)
+		return false, fmt.Errorf("cannot transition goal from %s to %s", t.state.Status, StatusActive)
 	}
 	t.state.Status, t.state.BlockerCount = StatusActive, 0
 	t.state.UpdatedAt = time.Now().UnixMilli()
-	return nil
+	return true, nil
 }
 
 // Blocked records a report that the goal cannot proceed and returns the state
