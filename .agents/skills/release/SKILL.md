@@ -5,6 +5,19 @@ description: "Prepare and publish a versioned release. Use when changing a relea
 
 # Release
 
+Use the repository automation for the normal path:
+
+```sh
+scripts/release.sh X.Y.Z --publish
+# or: make release-publish VERSION=X.Y.Z
+```
+
+It requires a clean `main` worktree, updates release metadata, runs checks and archive
+verification, creates the release commit, pushes `main`, waits for CI, creates the
+annotated tag, and verifies the GitHub release. Run without `--publish` to prepare and
+review the commit without pushing. Do not reuse the manual steps below when the script
+covers the release.
+
 Treat a release as one immutable commit, not as a tag added after the fact. The release
 commit owns the user-facing version, source-build version, tests, and documentation; the
 tag names that exact commit; CI publishes from that tag.
@@ -73,7 +86,7 @@ Done: the release commit exists, its staged diff was reviewed, and the worktree 
 
 ## 5. Publish in order
 
-Push the release commit to the intended branch first. Wait for the required branch CI to
+If automation is unavailable, push the release commit to the intended branch first. Wait for the required branch CI to
 finish successfully when the repository's workflow publishes or validates releases from
 that branch. Then create and push the annotated stable tag at the verified commit:
 

@@ -2,7 +2,7 @@ GO ?= go
 PREFIX ?= $(HOME)/.local
 BINDIR ?= $(PREFIX)/bin
 
-.PHONY: deps build build-broker build-broker-image build-workspace-image run install check test race vet smoke smoke-built release benchmark test-install test-self-update test-broker-container test-broker-cluster test-extensions
+.PHONY: deps build build-broker build-broker-image build-workspace-image run install check test race vet smoke smoke-built release release-publish benchmark test-install test-self-update test-broker-container test-broker-cluster test-extensions
 
 build:
 	$(GO) build -mod=vendor -trimpath -ldflags="-s -w" -o bin/ompig-slim .
@@ -54,6 +54,10 @@ smoke-built:
 
 release:
 	bash scripts/build-binaries.sh $(ARGS)
+
+# Prepare a versioned commit and publish it only when VERSION is explicit.
+release-publish:
+	bash scripts/release.sh $(VERSION) --publish
 
 # Exercise the user-facing installer against a loopback release server; needs
 # only Python 3, bash, and the usual archive/HTTP tools.

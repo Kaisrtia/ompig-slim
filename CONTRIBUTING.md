@@ -8,6 +8,22 @@ Understand the code you submit and its interactions with the rest of the system.
 
 Public development and CI run at [tmih06/ompig-slim](https://github.com/tmih06/ompig-slim). The original fork's contributor approval list is not inherited; this repository does not configure a separate hosted contributor-approval gate.
 
+## Releases
+
+Stable releases require a clean `main` worktree and an explicit version. The
+script prepares the version commit, runs the full checks and archive verification,
+and refuses existing tags:
+
+```sh
+scripts/release.sh 0.1.11             # prepare and commit; do not publish
+scripts/release.sh 0.1.11 --publish   # push main, tag, wait for CI, verify release
+# equivalent Make target:
+make release-publish VERSION=0.1.11
+```
+
+Use `--publish` only after reviewing the generated commit. It requires `gh`, pushes
+`main` before creating the tag, and never force-moves an existing tag.
+
 ## Reports
 
 Keep reports concise. Include the commit or version, operating system, command, minimal reproduction, and relevant output. Reproduce with `--no-extensions` before attributing a failure to core behavior. Follow SECURITY.md for security-sensitive reports; do not post credentials.
