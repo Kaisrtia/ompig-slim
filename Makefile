@@ -40,10 +40,14 @@ smoke: build
 # CI extracts a verified release binary before calling this build-free target.
 smoke-built:
 	python3 scripts/smoke-test-account-routing.py ./bin/ompig-slim
+	python3 scripts/measure-startup.py ./bin/ompig-slim --isolated --model @default --runs 1
+	python3 scripts/measure-resume.py ./bin/ompig-slim --turns 40 --runs 1
+	python3 scripts/measure-resume.py ./bin/ompig-slim --turns 40 --via-picker --runs 1
 	python3 scripts/smoke-test-compaction-fallback.py ./bin/ompig-slim
 	python3 scripts/smoke-test-durable.py ./bin/ompig-slim
 	python3 scripts/test-model-menu.py
 	python3 scripts/smoke-test-model-menu.py ./bin/ompig-slim
+	python3 scripts/measure-model-switch.py ./bin/ompig-slim --runs 1 --rtt-ms 20 --check-ui
 	python3 scripts/smoke-test-logout.py ./bin/ompig-slim
 	python3 scripts/smoke-test-quit.py ./bin/ompig-slim
 	python3 scripts/smoke-test-info-widgets.py ./bin/ompig-slim
