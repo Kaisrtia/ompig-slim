@@ -30,15 +30,18 @@ func TestOMPCatalogMatchesManifest(t *testing.T) {
 		t.Fatal("metadata index leaked into provider roster")
 	}
 	total := 0
+	localRows := 0
 	kinds := map[ModelType]int{}
 	for provider, want := range manifest.Providers {
 		catalog := loadOMPCatalog(provider)
 		if catalog == nil {
 			t.Fatal("missing provider", provider)
 		}
+		additions := len(ompCatalogAdditions(provider))
+		localRows += additions
 		rows := append(slices.Clone(catalog.chat), catalog.other...)
-		if len(rows) != want {
-			t.Fatalf("%s: decoded=%d want=%d", provider, len(rows), want)
+		if len(rows) != want+additions {
+			t.Fatalf("%s: decoded=%d want=%d", provider, len(rows), want+additions)
 		}
 		for _, row := range rows {
 			if row.Provider != provider || row.ID == "" {
@@ -52,7 +55,7 @@ func TestOMPCatalogMatchesManifest(t *testing.T) {
 		}
 		total += len(rows)
 	}
-	if total != 5949 || kinds[ModelTypeChat] != 5703 {
+	if total != 5949+localRows || kinds[ModelTypeChat] != 5703+localRows {
 		t.Fatal(total, kinds)
 	}
 	for _, kind := range []ModelType{"tiny", "judge", "image", "search", "tts", "stt", "embedding", "rerank", "video"} {
@@ -130,6 +133,42 @@ func TestOMPChatIndexesPreserveProviderPrecedence(t *testing.T) {
 	}
 	if _, ok := LookupOMPChatModelByID("not-a-bundled-id"); ok {
 		t.Fatal("missing bare ID resolved")
+	}
+}
+
+func TestOpenCodeGoHy4FlashFreeCatalogContract(t *testing.T) {
+	const modelID = "hy4-flash-free"
+	listed := 0
+	for _, model := range ListModels("opencode-go") {
+		if model.ID == modelID {
+			listed++
+		}
+	}
+	if listed != 1 {
+		t.Fatalf("OpenCode Go listing has %d %s entries, want 1", listed, modelID)
+	}
+	model, ok := LookupModelExact("opencode-go/" + modelID)
+	if !ok {
+		t.Fatal("exact lookup did not find OpenCode Go Hy4 Flash Free")
+	}
+	if model.Provider != "opencode-go" || model.ID != modelID || model.API != APIOpenAICompletions || model.BaseURL != "https://opencode.ai/inference/go/v1" {
+		t.Fatalf("model identity or endpoint = %+v", model)
+	}
+	if model.Kind != "chat" || !model.Reasoning || !slices.Equal(model.Capabilities, []string{"text", "image"}) {
+		t.Fatalf("model capabilities = %+v", model)
+	}
+	if model.ContextWindow != 1048576 || model.MaxOutputTokens != 65536 {
+		t.Fatalf("model limits = %d/%d", model.ContextWindow, model.MaxOutputTokens)
+	}
+	if model.InputCostPerMTokens != 0 || model.OutputCostPerMTokens != 0 || model.CacheReadCost != 0 || model.CacheWriteCost != 0 || len(model.Tiers) != 0 {
+		t.Fatalf("model pricing is not zero: %+v", model)
+	}
+	wantThinking := ThinkingLevelMap{
+		"off": new("none"), "minimal": nil, "low": nil, "medium": nil,
+		"high": new("high"), "xhigh": nil, "max": nil,
+	}
+	if !reflect.DeepEqual(model.ThinkingLevelMap, wantThinking) {
+		t.Fatalf("reasoning map = %s, want %s", SafeJsonStringify(model.ThinkingLevelMap), SafeJsonStringify(wantThinking))
 	}
 }
 

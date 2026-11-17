@@ -9,6 +9,8 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"net/http"
+	"time"
 
 	"github.com/MichaelKinsy/PiG/internal/jsonstringify"
 )
@@ -21,8 +23,9 @@ func openAIRequestError(ctx context.Context, err error, prefix string) error {
 	}
 	// retryProviderRequest throws validateServerRetryDelayMs's error with the SDK error's own message appended.
 	if exceeded, ok := errors.AsType[*providerRetryDelayError](err); ok && exceeded.status != 0 {
-		if sdkErr, ok := errors.AsType[*providerError](openAIHTTPError(exceeded.status, exceeded.body)); ok {
-			return &nodeTransportError{message: exceeded.head + ". " + sdkErr.message, cause: wrapped}
+		if sdkErr, ok := errors.AsType[*providerError](openAIHTTPError(exceeded.status, exceeded.body, exceeded.headers)); ok {
+			message := FormatProviderError(NormalizedProviderError{Message: exceeded.head + ". " + sdkErr.message, UsageResetAfter: sdkErr.usageResetAfter})
+			return &nodeTransportError{message: message, cause: wrapped}
 		}
 	}
 	if _, ok := errors.AsType[*providerRequestTimeoutError](err); ok {
@@ -35,7 +38,7 @@ func openAIRequestError(ctx context.Context, err error, prefix string) error {
 }
 
 // openAIHTTPError reconstructs the openai SDK's thrown status error: OpenAI.makeStatusError followed by APIError.generate's message and inner error object. Pi's shared error-body policy owns status/body composition and truncation.
-func openAIHTTPError(status int, raw []byte, prefix ...string) error {
+func openAIHTTPError(status int, raw []byte, headers http.Header, prefix ...string) error {
 	parsed := json.Valid(raw) && jsonValueTruthy(raw)
 	var sdkError json.RawMessage
 	if parsed {
@@ -52,7 +55,27 @@ func openAIHTTPError(status int, raw []byte, prefix ...string) error {
 	} else {
 		message = fmt.Sprintf("%d %s", status, message)
 	}
-	return &providerError{status: new(status), body: sdkError, message: message, prefix: prefix}
+	return &providerError{status: new(status), body: sdkError, message: message, prefix: prefix, usageResetAfter: freeUsageResetAfter(status, raw, headers)}
+}
+
+func freeUsageResetAfter(status int, body []byte, headers http.Header) time.Duration {
+	if status != http.StatusTooManyRequests ||
+		!bytes.Contains(body, []byte("FreeUsageLimitError")) && !bytes.Contains(body, []byte("GoUsageLimitError")) {
+		return 0
+	}
+	return retryAfterFromHeaders(headers)
+}
+
+func formatResetDelay(delay time.Duration) string {
+	minutes := int(delay / time.Minute)
+	switch {
+	case minutes < 60:
+		return fmt.Sprintf("%dm", max(1, minutes))
+	case minutes < 24*60:
+		return fmt.Sprintf("%dh%02dm", minutes/60, minutes%60)
+	default:
+		return fmt.Sprintf("%dd%02dh", minutes/(24*60), (minutes/60)%24)
+	}
 }
 
 // openAIStatusErrorObject returns APIError.error for a parsed, truthy response body. openai 7.x makeStatusError wraps an object or array body whose `error` member is null or absent as `{ error: body }`, so the whole body becomes the error object; APIError.generate then reads `body.error`, which is undefined for a string, number or boolean body.
