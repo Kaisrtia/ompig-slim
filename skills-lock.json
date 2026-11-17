@@ -115,6 +115,13 @@
       "skillPath": "skills/no-comments/SKILL.md",
       "computedHash": "704637f885463250ea631065f781d36a374b55ce6c98fd23a74b6163a51d5b56"
     },
+    "optimize": {
+      "source": "tmih06/skills",
+      "commit": "e4763dc4f91423cdeefdada5694ae0c7fa9d5128",
+      "sourceType": "github",
+      "skillPath": "skills/optimize/SKILL.md",
+      "computedHash": "59880ab4b05450ca779b9b29f4e30a36f87affc2b030de89a87ecec7b640fc38"
+    },
     "poteto-help": {
       "source": "backnotprop/pstack",
       "sourceType": "github",
@@ -126,6 +133,13 @@
       "sourceType": "github",
       "skillPath": "skills/poteto-mode/SKILL.md",
       "computedHash": "6d9089bb1e05d74fd07e61c71711decc3566ef97f7535a0696a6432e42c9c797"
+    },
+    "pr": {
+      "source": "tmih06/skills",
+      "commit": "e4763dc4f91423cdeefdada5694ae0c7fa9d5128",
+      "sourceType": "github",
+      "skillPath": "skills/pr/SKILL.md",
+      "computedHash": "34c7d82062f8bc9c8811f55cd9825f2365419a731f5d3b73d41b193bc9b88293"
     },
     "principle-attack-the-premise": {
       "source": "backnotprop/pstack",
@@ -283,6 +297,13 @@
       "skillPath": "skills/reflect/SKILL.md",
       "computedHash": "9f1542a7d829c18e3cc140e485fdc639655d9036a0aa0a4db63f346b58f06977"
     },
+    "research": {
+      "source": "tmih06/skills",
+      "commit": "e4763dc4f91423cdeefdada5694ae0c7fa9d5128",
+      "sourceType": "github",
+      "skillPath": "skills/research/SKILL.md",
+      "computedHash": "5bd6a6b833227dd87ee023c2d4734f4c349f290140514bb80bdc041ead1e837e"
+    },
     "setup-pstack": {
       "source": "backnotprop/pstack",
       "sourceType": "github",
@@ -300,6 +321,13 @@
       "sourceType": "github",
       "skillPath": "skills/show-me-your-work/SKILL.md",
       "computedHash": "200184d06ff304a1d74d4b995b487e9ecebe2a504f0185fa2c72cae4867194d3"
+    },
+    "simplify": {
+      "source": "tmih06/skills",
+      "commit": "e4763dc4f91423cdeefdada5694ae0c7fa9d5128",
+      "sourceType": "github",
+      "skillPath": "skills/simplify/SKILL.md",
+      "computedHash": "4724fff9ff22c6d74d21ae5a259ba586c86c09552582e42c71ebdff1a3e7bfd5"
     },
     "statechart": {
       "source": "backnotprop/pstack",
@@ -330,6 +358,13 @@
       "sourceType": "github",
       "skillPath": "skills/technical-writing/SKILL.md",
       "computedHash": "1863cdf897424614dbd6a4b63841850fe806d59e842c4083efa178e01b72003e"
+    },
+    "to-tickets": {
+      "source": "tmih06/skills",
+      "commit": "e4763dc4f91423cdeefdada5694ae0c7fa9d5128",
+      "sourceType": "github",
+      "skillPath": "skills/to-tickets/SKILL.md",
+      "computedHash": "e59ae54f6eca1eccdd5f64a7b435ebae82241c9c1e102b3d33fb6c6c9b743b77"
     },
     "typescript-best-practices": {
       "source": "backnotprop/pstack",
