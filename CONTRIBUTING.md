@@ -15,10 +15,10 @@ script prepares the version commit, runs the full checks and archive verificatio
 and refuses existing tags:
 
 ```sh
-scripts/release.sh 0.1.11             # prepare and commit; do not publish
-scripts/release.sh 0.1.11 --publish   # push main, tag, wait for CI, verify release
+scripts/release.sh 0.1.12             # prepare and commit; do not publish
+scripts/release.sh 0.1.12 --publish   # push main, tag, wait for CI, verify release
 # equivalent Make target:
-make release-publish VERSION=0.1.11
+make release-publish VERSION=0.1.12
 ```
 
 Use `--publish` only after reviewing the generated commit. It requires `gh`, pushes
