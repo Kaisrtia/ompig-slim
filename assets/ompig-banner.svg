@@ -8,7 +8,7 @@
     <!-- Pi mark: coral upper P, blue stem/base, and yellow i. -->
     <path fill="#e48a7a" d="M10 0h3v1h-3z M12 1h1v1h-1z"/>
     <path fill="#4f8eb3" d="M10 1h1v3h-1z M10 2h2v1h-2z"/>
-    <path fill="#eab65d" d="M12 2h1v2h-1z"/>
+    <path fill="#eab65d" d="M13 2h1v2h-1z"/>
     <!-- Go wordmark, using the startup's cyan block-letter G and O. -->
     <path fill="#00add8" d="M18 0h3v1h-3z M18 1h1v2h-1z M20 2h1v1h-1z M18 3h3v1h-3z M22 0h3v1h-3z M22 1h1v2h-1z M24 1h1v2h-1z M22 3h3v1h-3z"/>
     <!-- The logo places `in` between the two rows of GO. -->
