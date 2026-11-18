@@ -9,6 +9,7 @@ package ai
 // generation and classification share the same selection, blocking and fallback policy.
 
 import (
+	"cmp"
 	"context"
 	"errors"
 	"fmt"
@@ -101,8 +102,12 @@ type AccountRouter struct {
 	// retired even when the store cannot persist the block.
 	localBlocks map[string]map[accountKeyValue]map[string]accountBackoff
 	// listeners observe handoffs.
-	listeners         []*accountRotationListener
-	modelAvailability AccountModelAvailability
+	listeners []*accountRotationListener
+	// sessionUsageSource runs before durable reservations, never inside their transaction.
+	usageSource AccountSessionUsageSource
+	// sessionUsageInvalidator drops cached route usage after a confirmed reset.
+	sessionUsageInvalidator func(providerID string, accountKey *string)
+	modelAvailability       AccountModelAvailability
 }
 
 // NewAccountRouter builds a router over store. A nil or single-account store never routes.
@@ -272,14 +277,23 @@ type accountFailure struct {
 // Candidates returns the accounts one request may use, best first: eligible Codex free-tier
 // accounts, then other eligible accounts. Within each group, the session's assignment
 // precedes the provider's selected account, then row order. Durable stores preview
-// the next round-robin assignment without reserving it. Accounts whose Codex plan
+// the next assignment without reserving it. Accounts whose Codex plan
 // cannot serve the model are dropped up front; accounts whose plan cannot be read follow every
 // known-eligible account. It returns nil when the router does not route this request.
 func (r *AccountRouter) Candidates(ctx context.Context, model AnyModel, request AccountRouteRequest) ([]*CredentialAccountInfo, error) {
-	return r.candidates(ctx, model, request, false)
+	candidates, err := r.candidates(ctx, model, request, false)
+	if candidates == nil {
+		return nil, err
+	}
+	return candidates.accounts, err
 }
 
-func (r *AccountRouter) candidates(ctx context.Context, model AnyModel, request AccountRouteRequest, reserve bool) ([]*CredentialAccountInfo, error) {
+type accountRouteCandidates struct {
+	accounts []*CredentialAccountInfo
+	usage    []AccountSessionUsage
+}
+
+func (r *AccountRouter) candidates(ctx context.Context, model AnyModel, request AccountRouteRequest, reserve bool) (*accountRouteCandidates, error) {
 	if !r.Pooled() || request.APIKeySet || model == nil {
 		return nil, nil
 	}
@@ -305,9 +319,14 @@ func (r *AccountRouter) candidates(ctx context.Context, model AnyModel, request 
 	if len(accounts) == 0 {
 		return nil, nil
 	}
+	usage := r.accountSessionUsage(ctx, providerID, modelID, accounts)
+	if usage.err != nil {
+		return nil, usage.err
+	}
 	pinned, pinnedSet := r.PeekAccountKey(providerID, request.SessionID, modelID)
+	route := AccountSessionRoute{SessionID: request.SessionID, ModelID: modelID, Usage: usage.facts}
 	if store, ok := r.sessionStore(request); ok {
-		selection, err := store.ResolveSessionAccount(ctx, providerID, AccountSessionRoute{SessionID: request.SessionID, ModelID: modelID}, reserve)
+		selection, err := store.ResolveSessionAccount(ctx, providerID, route, reserve)
 		if err != nil {
 			return nil, err
 		}
@@ -316,15 +335,30 @@ func (r *AccountRouter) candidates(ctx context.Context, model AnyModel, request 
 			pinned = selection.AccountKey
 		}
 	}
-	// Explicit selection is a preference, not permission to send an ineligible account; the sort
-	// is stable, so rows keep their order within a rank.
+	usageByKey := make(map[accountKeyValue]*AccountSessionUsage, len(usage.facts))
+	for i := range usage.facts {
+		fact := usage.facts[i]
+		usageByKey[accountKeyOf(fact.AccountKey)] = &fact
+	}
 	slices.SortStableFunc(accounts, func(left, right *CredentialAccountInfo) int {
-		return accountRank(right, pinned, pinnedSet) - accountRank(left, pinned, pinnedSet)
+		leftRank := accountRank(left, pinned, pinnedSet)
+		rightRank := accountRank(right, pinned, pinnedSet)
+		if leftRank == 2 || rightRank == 2 {
+			return rightRank - leftRank
+		}
+		leftRemaining := shortestWindowRemaining(usageByKey[accountKeyOf(left.AccountKey)])
+		rightRemaining := shortestWindowRemaining(usageByKey[accountKeyOf(right.AccountKey)])
+		if leftRemaining != rightRemaining {
+			return cmp.Compare(rightRemaining, leftRemaining)
+		}
+		return rightRank - leftRank
 	})
 	r.mu.Lock()
 	modelAvailability := r.modelAvailability
 	r.mu.Unlock()
 	var freeTier, eligible, unknown []*CredentialAccountInfo
+	var exhaustedEligible bool
+	var earliestUsageReset *int64
 	rosterExcluded := false
 	for _, account := range accounts {
 		if err := context.Cause(ctx); err != nil {
@@ -353,7 +387,19 @@ func (r *AccountRouter) candidates(ctx context.Context, model AnyModel, request 
 			eligible = append(eligible, account)
 			continue
 		}
-		switch accountPlanPriority(providerID, modelID, *credential) {
+		accountUsage := usageByKey[accountKeyOf(account.AccountKey)]
+		plan := accountPlanPriorityWithUsage(providerID, modelID, *credential, accountUsage)
+		if plan == accountPlanIneligible {
+			continue
+		}
+		if accountSessionUsageExhausted(accountUsage) {
+			exhaustedEligible = true
+			if reset := accountUsageReadyAt(accountUsage); reset != nil {
+				earliestUsageReset = earliestDeadline(earliestUsageReset, *reset)
+			}
+			continue
+		}
+		switch plan {
 		case accountPlanFree:
 			freeTier = append(freeTier, account)
 		case accountPlanEligible:
@@ -365,12 +411,67 @@ func (r *AccountRouter) candidates(ctx context.Context, model AnyModel, request 
 	eligible = append(freeTier, eligible...)
 	eligible = append(eligible, unknown...)
 	if len(eligible) == 0 {
+		if exhaustedEligible {
+			return nil, errors.New(accountUnavailableMessage(providerID, modelID, earliestUsageReset))
+		}
 		if rosterExcluded {
 			return nil, fmt.Errorf("No stored account's model roster contains %s/%s.", providerID, modelID)
 		}
 		return nil, fmt.Errorf("No stored account meets the plan requirement for %s/%s. Sign in with an eligible account.", providerID, modelID)
 	}
-	return eligible, nil
+	return &accountRouteCandidates{accounts: eligible, usage: usage.facts}, nil
+}
+
+type accountSessionUsageResult struct {
+	facts []AccountSessionUsage
+	err   error
+}
+
+func (r *AccountRouter) accountSessionUsage(ctx context.Context, providerID, modelID string, accounts []*CredentialAccountInfo) accountSessionUsageResult {
+	if !isCodexAccountProvider(providerID) {
+		return accountSessionUsageResult{}
+	}
+	managedOAuth := false
+	for _, account := range accounts {
+		if account.Type == CredentialOAuth {
+			managedOAuth = true
+			break
+		}
+	}
+	if !managedOAuth {
+		return accountSessionUsageResult{}
+	}
+	source := r.sessionUsageSource()
+	if source == nil {
+		return accountSessionUsageResult{}
+	}
+	facts, err := source(ctx, providerID, modelID)
+	if err != nil {
+		return accountSessionUsageResult{err: err}
+	}
+	now := r.now()
+	byKey := make(map[accountKeyValue]AccountSessionUsage, len(facts))
+	for _, fact := range facts {
+		normalized, ok := normalizeAccountSessionUsage(fact, now)
+		if !ok {
+			continue
+		}
+		key := accountKeyOf(normalized.AccountKey)
+		current, exists := byKey[key]
+		if !exists || normalized.FetchedAt > current.FetchedAt {
+			byKey[key] = normalized
+		}
+	}
+	filtered := make([]AccountSessionUsage, 0, len(byKey))
+	for _, account := range accounts {
+		if account.Type != CredentialOAuth {
+			continue
+		}
+		if fact, ok := byKey[accountKeyOf(account.AccountKey)]; ok {
+			filtered = append(filtered, fact)
+		}
+	}
+	return accountSessionUsageResult{facts: filtered}
 }
 
 // accountRank scores a candidate: the session's pinned account, else the provider's selected
@@ -547,14 +648,18 @@ func (r *AccountRouter) Fail(ctx context.Context, model AnyModel, account *Crede
 // must still succeed before the account is confirmed. Call after the matching
 // persisted blocks have been cleared. Empty scopes is a no-op.
 func (r *AccountRouter) ClearResetBlocks(providerID string, accountKey *string, scopes []string) {
-	if r == nil {
+	if r == nil || len(scopes) == 0 {
 		return
 	}
 	r.mu.Lock()
-	defer r.mu.Unlock()
 	blocks := r.localBlocks[providerID][accountKeyOf(accountKey)]
 	for _, scope := range scopes {
 		delete(blocks, scope)
+	}
+	invalidateUsage := r.sessionUsageInvalidator
+	r.mu.Unlock()
+	if invalidateUsage != nil {
+		invalidateUsage(providerID, accountKey)
 	}
 }
 

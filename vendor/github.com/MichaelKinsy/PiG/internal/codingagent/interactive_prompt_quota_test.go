@@ -171,7 +171,7 @@ func (r promptQuotaTestResolver) ResolveUsageAccount(ctx context.Context, model 
 	return r.resolve(ctx, model)
 }
 
-func TestPromptQuotaModelSwitchResolvesTierAndRejectsLateResults(t *testing.T) {
+func TestPromptQuotaRefreshResolvesTierAndRejectsLateResults(t *testing.T) {
 	ctx, cancel := context.WithCancel(t.Context())
 	m := &InteractiveMode{
 		backgroundCtx: ctx,
@@ -208,6 +208,10 @@ func TestPromptQuotaModelSwitchResolvesTierAndRejectsLateResults(t *testing.T) {
 		t.Helper()
 		m.opts.Model = &ai.Model{ID: id, ProviderMeta: ai.ProviderMetadata{ProviderID: "test"}}
 		m.promptQuotaModelChanged()
+		if selection := m.promptQuota.selection; selection != nil && selection.model == id {
+			t.Fatalf("model switch started a route preview for %q", id)
+		}
+		m.refreshPromptQuotaAccount(ctx)
 		if label := m.promptQuotaLabel(100); label != "" {
 			t.Fatalf("pending route displayed default account quota: %q", label)
 		}
@@ -218,7 +222,7 @@ func TestPromptQuotaModelSwitchResolvesTierAndRejectsLateResults(t *testing.T) {
 			}
 			return r
 		case <-time.After(2 * time.Second):
-			t.Fatal("model switch did not resolve its account")
+			t.Fatal("quota refresh did not resolve the model's account")
 			return request{}
 		}
 	}
@@ -458,5 +462,55 @@ func TestPromptQuotaReadsMistralVibeCredits(t *testing.T) {
 	}
 	if strings.Contains(strings.ToLower(label), "mistral") {
 		t.Fatalf("the prompt quota named the provider: %q", label)
+	}
+}
+
+type previewUsageService struct{ t *testing.T }
+
+func (s previewUsageService) FetchSnapshot(context.Context, bool) (ai.UsageSnapshot, error) {
+	return ai.UsageSnapshot{}, nil
+}
+
+func (s previewUsageService) ActiveAccount(_ context.Context, _ string, key ...*string) (ai.UsageActiveAccount, bool) {
+	if len(key) != 1 || key[0] == nil || *key[0] != "free" {
+		s.t.Fatalf("usage board did not pass the previewed account: %v", key)
+	}
+	return ai.UsageActiveAccount{}, false
+}
+
+func TestUsageDashboardPreviewsThePendingRoute(t *testing.T) {
+	model := &ai.Model{ID: "gpt-6-luna", ProviderMeta: ai.ProviderMetadata{ProviderID: "openai-codex"}}
+	m := &InteractiveMode{
+		opts: InteractiveModeOptions{Model: model, SessionHandle: promptQuotaTestResolver{resolve: func(context.Context, *ai.Model) (*string, bool, error) {
+			return new("free"), true, nil
+		}}},
+	}
+	service := previewUsageService{t: t}
+	account, ok := m.resolveUsageActiveAccount(context.Background(), service, "openai-codex")
+	if !ok || account.AccountKey == nil || *account.AccountKey != "free" {
+		t.Fatalf("resolved account = %+v, ok=%v", account, ok)
+	}
+}
+
+type fallbackUsageService struct{}
+
+func (fallbackUsageService) FetchSnapshot(context.Context, bool) (ai.UsageSnapshot, error) {
+	return ai.UsageSnapshot{}, nil
+}
+
+func (fallbackUsageService) ActiveAccount(context.Context, string, ...*string) (ai.UsageActiveAccount, bool) {
+	return ai.UsageActiveAccount{AccountID: "selected-account"}, true
+}
+
+func TestUsageDashboardDoesNotShowSelectedAccountWhenPreviewFails(t *testing.T) {
+	model := &ai.Model{ID: "gpt-6-luna", ProviderMeta: ai.ProviderMetadata{ProviderID: "openai-codex"}}
+	m := &InteractiveMode{
+		opts: InteractiveModeOptions{Model: model, SessionHandle: promptQuotaTestResolver{resolve: func(context.Context, *ai.Model) (*string, bool, error) {
+			return nil, false, errors.New("remote broker unavailable")
+		}}},
+	}
+	account, ok := m.resolveUsageActiveAccount(context.Background(), fallbackUsageService{}, "openai-codex")
+	if ok {
+		t.Fatalf("failed preview displayed a session account: %+v", account)
 	}
 }
