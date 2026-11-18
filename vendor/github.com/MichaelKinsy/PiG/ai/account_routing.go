@@ -63,6 +63,9 @@ type AccountAttemptImages func(ctx context.Context, selection AccountSelection, 
 // AccountAttemptClassify opens one classification attempt for one account.
 type AccountAttemptClassify func(ctx context.Context, selection AccountSelection, observe AccountObserve, forceOAuthRefresh bool) (ClassifierResult, error)
 
+// AccountModelAvailability reports whether an authoritative model roster decides this account's membership.
+type AccountModelAvailability func(AnyModel, *Credential) (known, available bool)
+
 // accountKeyValue is a comparable projection of a nullable account key.
 type accountKeyValue struct {
 	key string
@@ -98,7 +101,8 @@ type AccountRouter struct {
 	// retired even when the store cannot persist the block.
 	localBlocks map[string]map[accountKeyValue]map[string]accountBackoff
 	// listeners observe handoffs.
-	listeners []*accountRotationListener
+	listeners         []*accountRotationListener
+	modelAvailability AccountModelAvailability
 }
 
 // NewAccountRouter builds a router over store. A nil or single-account store never routes.
@@ -114,6 +118,16 @@ func NewAccountRouter(store CredentialStore) *AccountRouter {
 
 // Pooled reports whether the store holds several accounts per provider.
 func (r *AccountRouter) Pooled() bool { return r != nil && r.credentials != nil }
+
+// SetModelAvailability installs an in-memory provider roster check for pooled routing.
+func (r *AccountRouter) SetModelAvailability(check AccountModelAvailability) {
+	if r == nil {
+		return
+	}
+	r.mu.Lock()
+	r.modelAvailability = check
+	r.mu.Unlock()
+}
 
 // SetClock replaces the router's clock (tests).
 func (r *AccountRouter) SetClock(now func() time.Time) {
@@ -307,12 +321,17 @@ func (r *AccountRouter) candidates(ctx context.Context, model AnyModel, request 
 	slices.SortStableFunc(accounts, func(left, right *CredentialAccountInfo) int {
 		return accountRank(right, pinned, pinnedSet) - accountRank(left, pinned, pinnedSet)
 	})
+	r.mu.Lock()
+	modelAvailability := r.modelAvailability
+	r.mu.Unlock()
 	var freeTier, eligible, unknown []*CredentialAccountInfo
+	rosterExcluded := false
 	for _, account := range accounts {
 		if err := context.Cause(ctx); err != nil {
 			return nil, err
 		}
-		if !isCodexAccountProvider(providerID) || account.Type != CredentialOAuth {
+		needsCredential := isCodexAccountProvider(providerID) && (account.Type == CredentialOAuth || modelAvailability != nil)
+		if !needsCredential {
 			eligible = append(eligible, account)
 			continue
 		}
@@ -321,6 +340,17 @@ func (r *AccountRouter) candidates(ctx context.Context, model AnyModel, request 
 			return nil, err
 		}
 		if credential == nil {
+			continue
+		}
+		if modelAvailability != nil {
+			known, available := modelAvailability(model, credential)
+			if known && !available {
+				rosterExcluded = true
+				continue
+			}
+		}
+		if account.Type != CredentialOAuth {
+			eligible = append(eligible, account)
 			continue
 		}
 		switch accountPlanPriority(providerID, modelID, *credential) {
@@ -335,6 +365,9 @@ func (r *AccountRouter) candidates(ctx context.Context, model AnyModel, request 
 	eligible = append(freeTier, eligible...)
 	eligible = append(eligible, unknown...)
 	if len(eligible) == 0 {
+		if rosterExcluded {
+			return nil, fmt.Errorf("No stored account's model roster contains %s/%s.", providerID, modelID)
+		}
 		return nil, fmt.Errorf("No stored account meets the plan requirement for %s/%s. Sign in with an eligible account.", providerID, modelID)
 	}
 	return eligible, nil
