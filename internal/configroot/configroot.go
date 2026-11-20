@@ -13,16 +13,23 @@ import (
 	"strings"
 )
 
-// Dir returns the configuration root: PIG_HOME when it is set and non-empty,
-// else ~/.pi. It reports an error only when the home directory cannot be
-// resolved, which is the one case where no useful fallback exists.
+// Dir returns the configuration root: PIG_HOME with a leading ~ or ~/ expanded,
+// as PiG's configroot.Resolve does, else ~/.pi. It reports an error only when
+// the home directory is needed and cannot be resolved.
 func Dir() (string, error) {
-	if root := strings.TrimSpace(os.Getenv("PIG_HOME")); root != "" {
+	root := os.Getenv("PIG_HOME")
+	if root != "~" && !strings.HasPrefix(root, "~/") && root != "" {
 		return root, nil
 	}
 	home, err := os.UserHomeDir()
 	if err != nil {
 		return "", err
+	}
+	if root == "~" {
+		return home, nil
+	}
+	if root != "" {
+		return filepath.Join(home, strings.TrimPrefix(root, "~/")), nil
 	}
 	return filepath.Join(home, ".pi"), nil
 }
