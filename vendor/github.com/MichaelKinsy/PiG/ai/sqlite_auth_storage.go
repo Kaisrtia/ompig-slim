@@ -38,6 +38,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 	"unicode/utf16"
@@ -288,7 +289,11 @@ func openSQLiteStore(path string, readOnly bool) (*SQLiteAuthStorage, error) {
 // sqliteDSN builds the driver URI. Read-only opens ask SQLite itself to refuse writes and skip the
 // WAL switch; writable opens set OMP's pragmas on every connection.
 func sqliteDSN(path string, readOnly bool) string {
-	location := &url.URL{Scheme: "file", Path: path}
+	p := filepath.ToSlash(path)
+	if !strings.HasPrefix(p, "/") {
+		p = "/" + p
+	}
+	location := &url.URL{Scheme: "file", Path: p}
 	query := url.Values{}
 	query.Add("_pragma", fmt.Sprintf("busy_timeout(%d)", sqliteBusyTimeoutMs))
 	query.Add("_txlock", "immediate")
@@ -693,7 +698,7 @@ func (s *SQLiteAuthStorage) List(ctx context.Context) ([]CredentialInfo, error) 
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT provider, credential_type
+	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT provider, credential_type, data
 		FROM auth_credentials WHERE disabled_cause IS NULL ORDER BY provider ASC`)
 	if err != nil {
 		return nil, err
@@ -701,9 +706,12 @@ func (s *SQLiteAuthStorage) List(ctx context.Context) ([]CredentialInfo, error) 
 	defer func() { _ = rows.Close() }()
 	var out []CredentialInfo
 	for rows.Next() {
-		var provider, kind string
-		if err := rows.Scan(&provider, &kind); err != nil {
+		var provider, kind, data string
+		if err := rows.Scan(&provider, &kind, &data); err != nil {
 			return nil, err
+		}
+		if decodeCredentialData(kind, data) == nil {
+			continue
 		}
 		out = append(out, CredentialInfo{ProviderID: provider, Type: infoCredentialType(kind)})
 	}
@@ -824,6 +832,9 @@ func (s *SQLiteAuthStorage) SaveAccount(ctx context.Context, providerID string, 
 }
 
 func (s *SQLiteAuthStorage) saveAccount(ctx context.Context, providerID string, accountKey *string, credential Credential) error {
+	if credential.Type == CredentialAPIKey && strings.TrimSpace(credential.Key) == "" && len(credential.Env) == 0 {
+		return errors.New("auth: empty API key")
+	}
 	data, err := encodeCredentialData(credential)
 	if err != nil {
 		return err
@@ -1711,12 +1722,16 @@ func decodeCredentialData(credentialType, data string) *Credential {
 		if err := json.Unmarshal(raw, &key); err != nil {
 			return nil
 		}
-		credential := &Credential{Type: CredentialAPIKey, Key: key}
+		var env map[string]string
 		if raw, ok := fields["env"]; ok {
-			var env map[string]string
-			if json.Unmarshal(raw, &env) == nil && len(env) > 0 {
-				credential.Env = env
-			}
+			_ = json.Unmarshal(raw, &env)
+		}
+		if strings.TrimSpace(key) == "" && len(env) == 0 {
+			return nil
+		}
+		credential := &Credential{Type: CredentialAPIKey, Key: key}
+		if len(env) > 0 {
+			credential.Env = env
 		}
 		return credential
 	case string(CredentialOAuth):

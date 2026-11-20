@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -368,6 +369,9 @@ func TestSQLiteStoreReadOnlyRejectsWrites(t *testing.T) {
 }
 
 func TestSQLiteStoreFileIsOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not support POSIX permission bits")
+	}
 	store, dir := openTestStore(t)
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -545,3 +549,46 @@ func TestSQLiteStoreClearsAccountBlocksByScope(t *testing.T) {
 		t.Fatalf("clear absent: %v", err)
 	}
 }
+
+func TestEmptyAPIKeyNotTreatedAsConfigured(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+
+	// Attempting to save an empty API key should fail
+	if _, err := store.SaveAccount(ctx, "cline-pass", nil, Credential{Type: CredentialAPIKey, Key: ""}); err == nil {
+		t.Fatal("expected error when saving empty API key, got nil")
+	}
+
+	// Insert raw row with empty API key simulating legacy/corrupt state
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO auth_credentials (provider, credential_type, data) VALUES (?, ?, ?)`,
+		"cline-pass", "api_key", `{"key":""}`); err != nil {
+		t.Fatalf("insert raw row: %v", err)
+	}
+
+	// Read should return nil for empty API key
+	cred, err := store.Read(ctx, "cline-pass")
+	if err != nil {
+		t.Fatalf("read: %v", err)
+	}
+	if cred != nil {
+		t.Fatalf("expected nil credential for empty API key, got %+v", cred)
+	}
+
+	// List should not include cline-pass
+	list, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, item := range list {
+		if item.ProviderID == "cline-pass" {
+			t.Fatalf("list should omit provider with empty API key, but found %+v", item)
+		}
+	}
+
+	// CredentialStoreAuthStatus should report Configured: false
+	status := CredentialStoreAuthStatus(ctx, store, "cline-pass")
+	if status.Configured {
+		t.Fatalf("expected CredentialStoreAuthStatus Configured: false, got %+v", status)
+	}
+}
+

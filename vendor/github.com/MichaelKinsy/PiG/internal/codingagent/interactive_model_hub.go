@@ -59,6 +59,7 @@ func (m *InteractiveMode) showModelHub() {
 	}
 	refreshes := newHubRefreshQueue(m, life, registry, availableItems, func() []tui.ModelSelectorItem { allSnapshot = nil; return allItems() })
 	var hub *tui.ModelHub
+	var h *tui.OverlayHandle
 	hub = tui.NewModelHub(tui.ModelHubConfig{
 		Models: availableItems(), AllModels: allItems(), Providers: registry.BrowserProviderIDs(), Current: modelSpec(m.opts.Model), Height: func() int { return m.tuiInst.Height() },
 		ScopedConfig: func(scope string) modelroles.Config {
@@ -152,11 +153,23 @@ func (m *InteractiveMode) showModelHub() {
 			})
 		},
 		Login: func(provider string) {
+			if h != nil {
+				h.Close()
+				h = nil
+			}
+			if previousMode == "regular" {
+				m.switchTuiMode("regular", true, true)
+			}
 			sc := m.buildSlashContext(life)
 			sc.Args = provider
 			if err := handleLoginCommand(sc); err != nil {
 				m.showError(err.Error())
 			}
+			if previousMode == "regular" {
+				m.switchTuiMode("fullscreen", true, true)
+			}
+			h = m.tuiInst.ShowOverlay(hub, tui.ModelHubOverlayOptions())
+			m.tuiInst.Render()
 			refreshes.request(provider, true, func(models, all []tui.ModelSelectorItem, err error) { hub.UpdateCatalog(models, all, err) })
 		},
 		Refresh:      refreshes.request,
@@ -193,8 +206,12 @@ func (m *InteractiveMode) showModelHub() {
 			return sm.ResolveModelRole(selector, pool)
 		}, Assign: sm.SetModelRole, DeleteRole: sm.DeleteModelRole, Fallback: sm.SetFallbackChain, Cycle: sm.SetRoleCycleOrder,
 	})
-	h := m.tuiInst.ShowOverlay(hub, tui.ModelHubOverlayOptions())
-	defer h.Close()
+	h = m.tuiInst.ShowOverlay(hub, tui.ModelHubOverlayOptions())
+	defer func() {
+		if h != nil {
+			h.Close()
+		}
+	}()
 	defer hub.Dispose()
 	hub.StartRefresh()
 	input, release := m.acquireModalInputChannel()
