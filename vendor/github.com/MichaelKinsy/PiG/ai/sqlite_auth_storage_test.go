@@ -8,6 +8,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -368,6 +369,9 @@ func TestSQLiteStoreReadOnlyRejectsWrites(t *testing.T) {
 }
 
 func TestSQLiteStoreFileIsOwnerOnly(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("Windows does not support POSIX permission bits")
+	}
 	store, dir := openTestStore(t)
 	if err := store.Close(); err != nil {
 		t.Fatalf("close: %v", err)
@@ -543,5 +547,75 @@ func TestSQLiteStoreClearsAccountBlocksByScope(t *testing.T) {
 	// store never blocked.
 	if err := store.ClearAccountBlocks(ctx, "openai-codex", new("absent"), []string{"chat"}); err != nil {
 		t.Fatalf("clear absent: %v", err)
+	}
+}
+
+func TestEmptyAPIKeyNotTreatedAsConfigured(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := store.SaveAccount(ctx, "cline-pass", nil, Credential{Type: CredentialAPIKey, Key: " "}); err == nil {
+		t.Fatal("saving a blank API key succeeded")
+	}
+	if _, err := store.db.ExecContext(ctx, `INSERT INTO auth_credentials (provider, credential_type, data) VALUES (?, ?, ?)`,
+		"cline-pass", "api_key", `{"key":""}`); err != nil {
+		t.Fatalf("insert raw row: %v", err)
+	}
+
+	if cred, err := store.Read(ctx, "cline-pass"); err != nil || cred != nil {
+		t.Fatalf("Read = %+v, %v; want nil", cred, err)
+	}
+	list, err := store.List(ctx)
+	if err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	for _, item := range list {
+		if item.ProviderID == "cline-pass" {
+			t.Fatalf("List includes blank-key provider: %+v", item)
+		}
+	}
+	if status := CredentialStoreAuthStatus(ctx, store, "cline-pass"); status.Configured {
+		t.Fatalf("status = %+v; want unconfigured", status)
+	}
+}
+
+func TestBedrockCredentialChainStaysConfigured(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+
+	if _, err := store.SaveAccount(ctx, "amazon-bedrock", nil, Credential{Type: CredentialAPIKey}); err != nil {
+		t.Fatalf("save credential-chain: %v", err)
+	}
+	if status := CredentialStoreAuthStatus(ctx, store, "amazon-bedrock"); !status.Configured {
+		t.Fatalf("status = %+v; want configured", status)
+	}
+	list, err := store.List(ctx)
+	if err != nil || len(list) != 1 || list[0].ProviderID != "amazon-bedrock" {
+		t.Fatalf("List = %+v, %v; want amazon-bedrock", list, err)
+	}
+}
+
+func TestListCollapsesAccountsPerProvider(t *testing.T) {
+	store, _ := openTestStore(t)
+	ctx := context.Background()
+	for _, key := range []string{"a", "b"} {
+		if _, err := store.SaveAccount(ctx, "anthropic", &key, Credential{Type: CredentialAPIKey, Key: "sk-" + key}); err != nil {
+			t.Fatalf("save %s: %v", key, err)
+		}
+	}
+	list, err := store.List(ctx)
+	if err != nil || len(list) != 1 {
+		t.Fatalf("List = %+v, %v; want one anthropic entry", list, err)
+	}
+}
+
+func TestSQLiteDSNPath(t *testing.T) {
+	for path, want := range map[string]string{
+		"C:/Users/me/.pi/agent/agent.db": "file:///C:/Users/me/.pi/agent/agent.db?",
+		"/home/me/.pi/agent/agent.db":    "file:///home/me/.pi/agent/agent.db?",
+	} {
+		if got := sqliteDSN(path, false); !strings.HasPrefix(got, want) {
+			t.Errorf("sqliteDSN(%q) = %q; want prefix %q", path, got, want)
+		}
 	}
 }

@@ -6,8 +6,9 @@ package ai
 
 import (
 	"context"
-	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 )
 
 func bedrockLogin(ctx context.Context, interaction AuthInteraction) (Credential, error) {
@@ -115,9 +116,9 @@ func promptAPIKey(ctx context.Context, interaction AuthInteraction, message stri
 	if err != nil {
 		return Credential{}, err
 	}
-	credential := Credential{Type: CredentialAPIKey, Key: key}
+	key = strings.TrimSpace(key)
 	if key == "" {
-		credential.Extra = map[string]json.RawMessage{"key": json.RawMessage(`""`)}
+		return Credential{}, errors.New("API key cannot be empty")
 	}
-	return credential, nil
+	return Credential{Type: CredentialAPIKey, Key: key}, nil
 }
