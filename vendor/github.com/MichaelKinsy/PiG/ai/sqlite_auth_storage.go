@@ -290,7 +290,7 @@ func openSQLiteStore(path string, readOnly bool) (*SQLiteAuthStorage, error) {
 // WAL switch; writable opens set OMP's pragmas on every connection.
 func sqliteDSN(path string, readOnly bool) string {
 	p := filepath.ToSlash(path)
-	if !strings.HasPrefix(p, "/") {
+	if len(p) >= 2 && p[1] == ':' {
 		p = "/" + p
 	}
 	location := &url.URL{Scheme: "file", Path: p}
@@ -628,7 +628,18 @@ func rowCredential(row *credentialRow) *Credential {
 	if row == nil {
 		return nil
 	}
-	return decodeCredentialData(row.CredentialType, row.Data)
+	credential := decodeCredentialData(row.CredentialType, row.Data)
+	if credential == nil || !usableCredential(row.Provider, *credential) {
+		return nil
+	}
+	return credential
+}
+
+// usableCredential rejects an API key that carries neither a key nor provider env, which an
+// accidental Enter at a key prompt used to persist. Bedrock's credential chain is the one provider
+// whose credential is legitimately blank: it authenticates from the ambient AWS environment.
+func usableCredential(providerID string, credential Credential) bool {
+	return credential.Type != CredentialAPIKey || strings.TrimSpace(credential.Key) != "" || len(credential.Env) > 0 || providerID == "amazon-bedrock"
 }
 
 // Read implements CredentialStore: the active account's credential.
@@ -698,22 +709,28 @@ func (s *SQLiteAuthStorage) List(ctx context.Context) ([]CredentialInfo, error) 
 	if err := context.Cause(ctx); err != nil {
 		return nil, err
 	}
-	rows, err := s.db.QueryContext(ctx, `SELECT DISTINCT provider, credential_type, data
+	rows, err := s.db.QueryContext(ctx, `SELECT provider, credential_type, CASE WHEN credential_type = 'api_key' THEN data END
 		FROM auth_credentials WHERE disabled_cause IS NULL ORDER BY provider ASC`)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = rows.Close() }()
 	var out []CredentialInfo
+	seen := map[CredentialInfo]bool{}
 	for rows.Next() {
-		var provider, kind, data string
+		var provider, kind string
+		var data sql.NullString
 		if err := rows.Scan(&provider, &kind, &data); err != nil {
 			return nil, err
 		}
-		if decodeCredentialData(kind, data) == nil {
+		if data.Valid && rowCredential(&credentialRow{Provider: provider, CredentialType: kind, Data: data.String}) == nil {
 			continue
 		}
-		out = append(out, CredentialInfo{ProviderID: provider, Type: infoCredentialType(kind)})
+		info := CredentialInfo{ProviderID: provider, Type: infoCredentialType(kind)}
+		if !seen[info] {
+			seen[info] = true
+			out = append(out, info)
+		}
 	}
 	return out, rows.Err()
 }
@@ -832,7 +849,7 @@ func (s *SQLiteAuthStorage) SaveAccount(ctx context.Context, providerID string, 
 }
 
 func (s *SQLiteAuthStorage) saveAccount(ctx context.Context, providerID string, accountKey *string, credential Credential) error {
-	if credential.Type == CredentialAPIKey && strings.TrimSpace(credential.Key) == "" && len(credential.Env) == 0 {
+	if !usableCredential(providerID, credential) {
 		return errors.New("auth: empty API key")
 	}
 	data, err := encodeCredentialData(credential)
@@ -1722,16 +1739,12 @@ func decodeCredentialData(credentialType, data string) *Credential {
 		if err := json.Unmarshal(raw, &key); err != nil {
 			return nil
 		}
-		var env map[string]string
-		if raw, ok := fields["env"]; ok {
-			_ = json.Unmarshal(raw, &env)
-		}
-		if strings.TrimSpace(key) == "" && len(env) == 0 {
-			return nil
-		}
 		credential := &Credential{Type: CredentialAPIKey, Key: key}
-		if len(env) > 0 {
-			credential.Env = env
+		if raw, ok := fields["env"]; ok {
+			var env map[string]string
+			if json.Unmarshal(raw, &env) == nil && len(env) > 0 {
+				credential.Env = env
+			}
 		}
 		return credential
 	case string(CredentialOAuth):

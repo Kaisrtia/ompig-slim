@@ -18,7 +18,6 @@ import (
 	"os"
 	"slices"
 	"strconv"
-	"strings"
 	"sync"
 
 	"github.com/MichaelKinsy/PiG/extensions/sdk/json"
@@ -658,10 +657,8 @@ func CredentialStoreProviderEnv(ctx context.Context, store CredentialStore, prov
 
 // CredentialStoreAuthStatus reports whether auth is configured for providerID in store without refreshing OAuth tokens. It mirrors AuthStorage.GetAuthStatus over any CredentialStore.
 func CredentialStoreAuthStatus(ctx context.Context, store CredentialStore, providerID string) AuthStatus {
-	if cred, ok, err := ReadRawCredential(ctx, store, providerID); err == nil && ok {
-		if cred.Type != CredentialAPIKey || strings.TrimSpace(cred.Key) != "" || len(cred.Env) > 0 {
-			return AuthStatus{Configured: true, Source: AuthSourceStored}
-		}
+	if _, ok, err := ReadRawCredential(ctx, store, providerID); err == nil && ok {
+		return AuthStatus{Configured: true, Source: AuthSourceStored}
 	}
 	if key := firstAuthEnvKey(providerID); key != "" {
 		return AuthStatus{Configured: false, Source: AuthSourceEnvironment, Label: key}

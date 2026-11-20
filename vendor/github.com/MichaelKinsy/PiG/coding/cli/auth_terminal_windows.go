@@ -22,22 +22,15 @@ func readAuthLoginInput(ctx context.Context, buffer []byte) (int, error) {
 		if err != nil {
 			return os.Stdin.Read(buffer)
 		}
-		if ctx.Err() != nil {
-			return 0, context.Cause(ctx)
-		}
-		if event == windows.WAIT_OBJECT_0 {
-			n, readErr := os.Stdin.Read(buffer)
-			if readErr != nil {
-				return n, readErr
+		switch event {
+		case uint32(windows.WAIT_TIMEOUT):
+		case windows.WAIT_OBJECT_0:
+			if ctx.Err() != nil {
+				return 0, context.Cause(ctx)
 			}
-			if n > 0 {
-				return n, nil
-			}
-			continue
+			return os.Stdin.Read(buffer)
+		default:
+			return 0, io.EOF
 		}
-		if event == uint32(windows.WAIT_TIMEOUT) {
-			continue
-		}
-		return 0, io.EOF
 	}
 }

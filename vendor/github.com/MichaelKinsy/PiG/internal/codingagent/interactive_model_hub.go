@@ -153,10 +153,7 @@ func (m *InteractiveMode) showModelHub() {
 			})
 		},
 		Login: func(provider string) {
-			if h != nil {
-				h.Close()
-				h = nil
-			}
+			h.Close()
 			if previousMode == "regular" {
 				m.switchTuiMode("regular", true, true)
 			}
@@ -207,11 +204,7 @@ func (m *InteractiveMode) showModelHub() {
 		}, Assign: sm.SetModelRole, DeleteRole: sm.DeleteModelRole, Fallback: sm.SetFallbackChain, Cycle: sm.SetRoleCycleOrder,
 	})
 	h = m.tuiInst.ShowOverlay(hub, tui.ModelHubOverlayOptions())
-	defer func() {
-		if h != nil {
-			h.Close()
-		}
-	}()
+	defer func() { h.Close() }()
 	defer hub.Dispose()
 	hub.StartRefresh()
 	input, release := m.acquireModalInputChannel()
